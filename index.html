@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>パスワード管理</title>
+<style>
+:root{--bg:#eef2f4;--surface:#fff;--ink:#17262e;--muted:#5d6f78;--line:#d3dce0;--accent:#0f6b7a;--accent-ink:#fff;--danger:#b4372b;--ok:#2b7a4b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#10191d;--surface:#18252b;--ink:#e6eef1;--muted:#93a6ae;--line:#2b3b43;--accent:#4fb6c6;--accent-ink:#06191d;--danger:#ff8a7c;--ok:#7bd49a;color-scheme:dark}}
+*,*::before,*::after{box-sizing:inherit}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Hiragino Sans","Yu Gothic","Meiryo",sans-serif;line-height:1.6}
+main{max-width:640px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:1.4rem;margin:0 0 4px}
+p.sub{color:var(--muted);margin:0 0 20px;font-size:.92rem}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:20px}
+label{display:block;font-weight:500;font-size:.9rem;margin:14px 0 4px}
+input,textarea{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:9px 11px}
+input:focus-visible,textarea:focus-visible,button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+textarea{resize:vertical;min-height:60px}
+button{font:inherit;cursor:pointer;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);padding:8px 14px}
+button:disabled{opacity:.5;cursor:default}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:700}
+button.danger{color:var(--danger)}
+button.small{padding:4px 10px;font-size:.85rem}
+.row{display:flex;gap:8px;align-items:center}
+.row>input{flex:1}
+.bar{display:flex;gap:8px;margin-bottom:6px}
+.bar input{flex:1}
+.item{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:10px}
+.item h3{margin:0;font-size:1.05rem}
+.item .meta{color:var(--muted);font-size:.9rem;word-break:break-all}
+.item .pw{font-family:ui-monospace,Consolas,monospace;word-break:break-all}
+.actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.msg{min-height:1.4em;color:var(--danger);font-size:.9rem;margin:10px 0 0}
+.empty{text-align:center;color:var(--muted);padding:32px 0}
+.note{color:var(--muted);font-size:.82rem;margin-top:16px}
+.gen{display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap;font-size:.9rem}
+.gen input[type=range]{width:120px;padding:0}
+.gen label{display:inline;margin:0;font-weight:400}
+.gen input[type=checkbox]{width:auto}
+#sync{font-size:.82rem;color:var(--muted);margin:0 0 12px}
+#sync.ok{color:var(--ok)}#sync.bad{color:var(--danger)}
+#hits{font-size:.85rem;color:var(--muted);min-height:1.3em;margin:0 0 10px}
+details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted)}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 16px;border-radius:20px;font-size:.9rem;opacity:0;pointer-events:none;transition:opacity .2s}
+#toast.show{opacity:1}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <section id="lock" hidden>
+    <h1>パスワード管理</h1>
+    <p class="sub" id="lockSub"></p>
+    <div class="panel">
+      <label for="master" style="margin-top:0">マスターパスワード</label>
+      <input id="master" type="password" autocomplete="off">
+      <div id="confirmWrap" hidden>
+        <label for="master2">マスターパスワード（確認）</label>
+        <input id="master2" type="password" autocomplete="off">
+      </div>
+      <p class="msg" id="lockMsg" role="alert"></p>
+      <div style="margin-top:14px"><button class="primary" id="lockBtn">Googleドライブに接続して開く</button></div>
+      <details id="setup">
+        <summary>Googleの設定（クライアントID）</summary>
+        <label for="cid">OAuth クライアントID</label>
+        <div class="row"><input id="cid" autocomplete="off" spellcheck="false" placeholder="xxxx.apps.googleusercontent.com"><button id="cidSave" type="button">保存</button></div>
+        <p class="note" style="margin-top:6px">この端末のブラウザに保存されます。初回だけ入力してください。</p>
+      </details>
+    </div>
+  </section>
+
+  <section id="app" hidden>
+    <div class="top">
+      <div><h1>パスワード管理</h1><p class="sub" id="count"></p></div>
+      <div class="row"><button id="syncBtn">今すぐ同期</button><button id="lockNow">ロック</button></div>
+    </div>
+    <p id="sync"></p>
+    <div class="bar">
+      <input id="search" type="search" placeholder="キーワード検索（スペースで複数指定）" aria-label="キーワード検索" autocomplete="off">
+      <button class="primary" id="addBtn">追加</button>
+    </div>
+    <p id="hits"></p>
+
+    <div class="panel" id="form" hidden style="margin-bottom:16px">
+      <label for="fSite" style="margin-top:0">サイト・サービス名</label>
+      <input id="fSite" autocomplete="off">
+      <label for="fUser">利用者ID</label>
+      <input id="fUser" autocomplete="off">
+      <label for="fPass">パスワード</label>
+      <div class="row"><input id="fPass" type="text" autocomplete="off" spellcheck="false"><button id="fGen" type="button">生成</button></div>
+      <div class="gen">
+        <span>長さ <b id="lenVal">16</b></span>
+        <input id="len" type="range" min="8" max="40" value="16" aria-label="長さ">
+        <span><input id="optSym" type="checkbox" checked> <label for="optSym">記号を含める</label></span>
+      </div>
+      <label for="fMemo">メモ（検索の対象になります）</label>
+      <textarea id="fMemo"></textarea>
+      <p class="msg" id="formMsg" role="alert"></p>
+      <div class="row" style="margin-top:12px;justify-content:flex-end">
+        <button id="fCancel">キャンセル</button>
+        <button class="primary" id="fSave">保存</button>
+      </div>
+    </div>
+
+    <div id="list"></div>
+    <p class="note">データはマスターパスワードで暗号化されてからGoogleドライブに保存されます。マスターパスワードを忘れると復元できません。5分操作がないと自動でロックされます。検索の対象はサイト名・ID・メモで、パスワードは含みません。</p>
+  </section>
+</main>
+<div id="toast" role="status"></div>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+(function(){
+  // ここにクライアントIDを直接書いてもOK（空なら画面から入力）
+  var CLIENT_ID_CONST='';
+  var LOCAL='pm-drive-cache', CIDKEY='pm-drive-cid', ITER=310000;
+  var SCOPE='https://www.googleapis.com/auth/drive.appdata';
+  var API='https://www.googleapis.com/drive/v3', UP='https://www.googleapis.com/upload/drive/v3';
+  var enc=new TextEncoder(), dec=new TextDecoder();
+  var cid=CLIENT_ID_CONST||lsGet(CIDKEY)||'';
+  var cryptoKey=null, salt=null, items=[], editId=null, timer=null, baseTs=0, fileId=null;
+  var token=null, tokenExp=0, tc=null, pending=null;
+  var $=function(id){return document.getElementById(id)};
+
+  function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
+  function lsSet(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+  function b64(buf){var s='',b=new Uint8Array(buf);for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s)}
+  function unb64(s){var b=atob(s),u=new Uint8Array(b.length);for(var i=0;i<b.length;i++)u[i]=b.charCodeAt(i);return u}
+  function toast(t){var el=$('toast');el.textContent=t;el.classList.add('show');setTimeout(function(){el.classList.remove('show')},1800)}
+  function setSync(t,cls){var e=$('sync');e.textContent=t;e.className=cls||''}
+
+  /* ---------- 暗号 ---------- */
+  async function derive(pw,s){
+    var base=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveKey']);
+    return crypto.subtle.deriveKey({name:'PBKDF2',salt:s,iterations:ITER,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+  }
+  async function seal(){
+    var iv=crypto.getRandomValues(new Uint8Array(12));
+    var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},cryptoKey,enc.encode(JSON.stringify(items)));
+    return {v:1,salt:b64(salt),iv:b64(iv),data:b64(ct),ts:Date.now()};
+  }
+  async function openEnv(env,k){
+    var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(env.iv)},k,unb64(env.data));
+    return JSON.parse(dec.decode(pt));
+  }
+
+  /* ---------- Google ---------- */
+  function initTC(){
+    if(tc)return true;
+    if(!window.google||!google.accounts||!cid)return false;
+    tc=google.accounts.oauth2.initTokenClient({
+      client_id:cid,scope:SCOPE,
+      callback:function(r){var p=pending;pending=null;if(!p)return;
+        if(r.error){p.rej(new Error('Googleへの接続に失敗しました（'+r.error+'）'))}
+        else{token=r.access_token;tokenExp=Date.now()+(+r.expires_in)*1000;p.res(token)}},
+      error_callback:function(e){var p=pending;pending=null;if(p)p.rej(new Error(e&&e.type==='popup_closed'?'Googleのログインがキャンセルされました。':'ログインウィンドウを開けませんでした。ポップアップを許可してください。'))}
+    });
+    return true;
+  }
+  function getToken(){
+    return new Promise(function(res,rej){
+      if(token&&Date.now()<tokenExp-60000)return res(token);
+      if(!initTC())return rej(new Error('Googleの読み込み中です。数秒待ってからもう一度お試しください。'));
+      pending={res:res,rej:rej};
+      tc.requestAccessToken({prompt:''});
+    });
+  }
+  async function dfetch(url,opt){
+    opt=opt||{};var t=await getToken();
+    function go(tk){opt.headers=Object.assign({},opt.headers,{Authorization:'Bearer '+tk});return fetch(url,opt)}
+    var r=await go(t);
+    if(r.status===401){token=null;r=await go(await getToken())}
+    if(!r.ok)throw new Error('Googleドライブのエラー（'+r.status+'）');
+    return r;
+  }
+  async function findFile(){
+    var r=await dfetch(API+'/files?spaces=appDataFolder&fields=files(id)&q='+encodeURIComponent("name='vault.json'"));
+    var j=await r.json();return j.files&&j.files[0]?j.files[0].id:null;
+  }
+  async function pull(){
+    if(!fileId)fileId=await findFile();
+    if(!fileId)return null;
+    var r=await dfetch(API+'/files/'+fileId+'?alt=media');
+    return r.json();
+  }
+  async function push(env){
+    var body=JSON.stringify(env);
+    if(!fileId)fileId=await findFile();
+    if(fileId){
+      await dfetch(UP+'/files/'+fileId+'?uploadType=media',{method:'PATCH',headers:{'Content-Type':'application/json'},body:body});
+    }else{
+      var b='pmb'+Date.now();
+      var mp='--'+b+'\r\nContent-Type: application/json\r\n\r\n'+JSON.stringify({name:'vault.json',parents:['appDataFolder']})+'\r\n--'+b+'\r\nContent-Type: application/json\r\n\r\n'+body+'\r\n--'+b+'--';
+      var r=await dfetch(UP+'/files?uploadType=multipart&fields=id',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body:mp});
+      fileId=(await r.json()).id;
+    }
+  }
+
+  /* ---------- 保存・同期 ---------- */
+  function merge(a,b){
+    var m={};a.concat(b).forEach(function(i){if(!m[i.id]||(i.upd||0)>(m[i.id].upd||0))m[i.id]=i});
+    return Object.keys(m).map(function(k){return m[k]}).sort(function(x,y){return (y.upd||0)-(x.upd||0)});
+  }
+  async function save(){
+    if(!cryptoKey)return;
+    setSync('同期中…');
+    var env=await seal();lsSet(LOCAL,JSON.stringify(env));
+    try{
+      var remote=await pull();
+      if(remote){
+        if(remote.salt!==b64(salt))throw new Error('別のデータがドライブにあります。ロックして開き直してください。');
+        if(remote.ts>baseTs){
+          items=merge(items,await openEnv(remote,cryptoKey));
+          env=await seal();lsSet(LOCAL,JSON.stringify(env));render();
+        }
+      }
+      await push(env);baseTs=env.ts;
+      setSync('Googleドライブと同期済み','ok');
+    }catch(e){setSync('未同期：'+e.message+'（変更はこの端末に保存済み）','bad')}
+  }
+
+  /* ---------- ロック画面 ---------- */
+  function showLock(){
+    cryptoKey=null;items=[];token=null;clearTimeout(timer);
+    $('app').hidden=true;$('lock').hidden=false;$('form').hidden=true;
+    $('confirmWrap').hidden=true;$('master').value='';$('master2').value='';$('lockMsg').textContent='';
+    $('lockSub').textContent='マスターパスワードを入力すると、Googleドライブからデータを読み込みます。';
+    $('cid').value=cid;$('setup').open=!cid;
+    $('master').focus();
+  }
+  async function unlock(){
+    var pw=$('master').value, msg=$('lockMsg');msg.textContent='';
+    if(!cid){msg.textContent='先に「Googleの設定」でクライアントIDを保存してください。';$('setup').open=true;return}
+    if(!pw){msg.textContent='マスターパスワードを入力してください。';return}
+    $('lockBtn').disabled=true;
+    try{
+      var local=null;try{local=JSON.parse(lsGet(LOCAL))}catch(e){}
+      var remote=null,offline=false;
+      try{remote=await pull()}catch(e){if(!local){msg.textContent=e.message;return}offline=true}
+      var env=remote;
+      if(local&&(!remote||(local.salt===remote.salt&&local.ts>remote.ts)))env=local;
+      if(!env){
+        if($('confirmWrap').hidden){
+          $('confirmWrap').hidden=false;
+          msg.textContent='Googleドライブにデータがありません。新規作成します。確認のためもう一度入力して、ボタンを押してください。';
+          return;
+        }
+        if(pw.length<8){msg.textContent='8文字以上で入力してください。';return}
+        if(pw!==$('master2').value){msg.textContent='確認用の入力が一致しません。';return}
+        salt=crypto.getRandomValues(new Uint8Array(16));
+        cryptoKey=await derive(pw,salt);items=[];baseTs=0;
+      }else{
+        var k=await derive(pw,unb64(env.salt));
+        try{items=await openEnv(env,k)}catch(e){msg.textContent='マスターパスワードが違います。';return}
+        salt=unb64(env.salt);cryptoKey=k;baseTs=remote?remote.ts:0;
+      }
+      $('lock').hidden=true;$('app').hidden=false;$('search').value='';render();bump();
+      if(offline){setSync('オフラインです。この端末のデータを表示中（未同期）','bad')}
+      else if(!env||env!==remote){await save()}
+      else setSync('Googleドライブと同期済み','ok');
+    }catch(e){msg.textContent=e.message||'エラーが発生しました。'}
+    finally{$('lockBtn').disabled=false}
+  }
+  function bump(){clearTimeout(timer);if(cryptoKey)timer=setTimeout(showLock,5*60*1000)}
+  ['click','keydown','touchstart'].forEach(function(e){document.addEventListener(e,bump,{passive:true})});
+
+  /* ---------- 一覧・検索 ---------- */
+  function norm(s){
+    return (s||'').normalize('NFKC').toLowerCase().replace(/[\u30a1-\u30f6]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-96)});
+  }
+  function el(tag,cls,txt){var n=document.createElement(tag);if(cls)n.className=cls;if(txt!=null)n.textContent=txt;return n}
+  function render(){
+    var terms=norm($('search').value).split(/\s+/).filter(Boolean), list=$('list');
+    list.textContent='';
+    $('count').textContent=items.length+' 件を保存中';
+    var shown=items.filter(function(i){
+      if(!terms.length)return true;
+      var h=norm(i.site+' '+i.user+' '+i.memo);
+      return terms.every(function(t){return h.indexOf(t)>-1});
+    });
+    $('hits').textContent=terms.length?shown.length+' 件が見つかりました（全 '+items.length+' 件）':'';
+    if(!shown.length){list.appendChild(el('div','empty',items.length?'該当する項目がありません。ひらがな・カタカナ・全角半角は区別せず検索します。':'まだ何も保存されていません。「追加」から登録できます。'));return}
+    shown.forEach(function(i){
+      var card=el('div','item'), vis=false;
+      card.appendChild(el('h3',null,i.site||'(名称なし)'));
+      card.appendChild(el('div','meta','ID: '+(i.user||'—')));
+      var pw=el('div','pw','パスワード: ••••••••');card.appendChild(pw);
+      if(i.memo)card.appendChild(el('div','meta','メモ: '+i.memo));
+      var a=el('div','actions');
+      function btn(t,fn,c){var b=el('button','small '+(c||''),t);b.type='button';b.onclick=fn;a.appendChild(b);return b}
+      var tg=btn('表示',function(){vis=!vis;pw.textContent='パスワード: '+(vis?i.pass:'••••••••');tg.textContent=vis?'隠す':'表示'});
+      btn('IDをコピー',function(){copy(i.user,'IDをコピーしました')});
+      btn('パスワードをコピー',function(){copy(i.pass,'コピーしました（30秒後にクリア）',true)});
+      btn('編集',function(){openForm(i)});
+      btn('削除',async function(){
+        if(confirm('「'+(i.site||'この項目')+'」を削除しますか？\n（複数端末で同期中の場合、ほかの端末のデータから復活することがあります）')){
+          items=items.filter(function(x){return x.id!==i.id});render();await save();
+        }
+      },'danger');
+      card.appendChild(a);list.appendChild(card);
+    });
+  }
+  function copy(t,m,clear){
+    navigator.clipboard.writeText(t||'').then(function(){
+      toast(m);
+      if(clear)setTimeout(function(){navigator.clipboard.writeText('').catch(function(){})},30000);
+    }).catch(function(){toast('コピーできませんでした')});
+  }
+  function gen(){
+    var n=+$('len').value, sym=$('optSym').checked;
+    var set='abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'+(sym?'!#$%&*+-=?@_':'');
+    var out='', lim=Math.floor(4294967296/set.length)*set.length, r=new Uint32Array(1);
+    while(out.length<n){crypto.getRandomValues(r);if(r[0]<lim)out+=set[r[0]%set.length]}
+    $('fPass').value=out;
+  }
+  function openForm(i){
+    editId=i?i.id:null;
+    $('fSite').value=i?i.site:'';$('fUser').value=i?i.user:'';
+    $('fPass').value=i?i.pass:'';$('fMemo').value=i?i.memo:'';
+    $('formMsg').textContent='';$('form').hidden=false;
+    $('form').scrollIntoView({block:'nearest'});$('fSite').focus();
+  }
+
+  /* ---------- イベント ---------- */
+  $('lockBtn').onclick=unlock;
+  ['master','master2'].forEach(function(id){$(id).addEventListener('keydown',function(e){if(e.key==='Enter')unlock()})});
+  $('cidSave').onclick=function(){
+    var v=$('cid').value.trim();
+    if(!/\.apps\.googleusercontent\.com$/.test(v)){$('lockMsg').textContent='クライアントIDは「…apps.googleusercontent.com」の形式です。';return}
+    cid=v;lsSet(CIDKEY,v);tc=null;$('lockMsg').textContent='';$('setup').open=false;toast('保存しました');
+  };
+  $('lockNow').onclick=showLock;
+  $('syncBtn').onclick=async function(){await save();toast('同期を実行しました')};
+  $('addBtn').onclick=function(){openForm(null);gen()};
+  $('fGen').onclick=gen;
+  $('len').oninput=function(){$('lenVal').textContent=this.value};
+  $('fCancel').onclick=function(){$('form').hidden=true};
+  $('search').oninput=render;
+  $('fSave').onclick=async function(){
+    var site=$('fSite').value.trim(), pass=$('fPass').value;
+    if(!site){$('formMsg').textContent='サイト・サービス名を入力してください。';return}
+    if(!pass){$('formMsg').textContent='パスワードを入力するか、「生成」を押してください。';return}
+    var rec={id:editId||String(Date.now())+Math.random().toString(16).slice(2),site:site,user:$('fUser').value.trim(),pass:pass,memo:$('fMemo').value.trim(),upd:Date.now()};
+    items=editId?items.map(function(x){return x.id===editId?rec:x}):[rec].concat(items);
+    $('form').hidden=true;render();await save();
+  };
+
+  showLock();
+})();
+</script>
+</body>
+</html>
