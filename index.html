@@ -43,6 +43,14 @@ button.small{padding:4px 10px;font-size:.85rem}
 #sync.ok{color:var(--ok)}#sync.bad{color:var(--danger)}
 #hits{font-size:.85rem;color:var(--muted);min-height:1.3em;margin:0 0 10px}
 details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted)}
+.th{position:relative;width:84px;height:84px}
+.th img,.gal img{width:100%;height:100%;object-fit:cover;border-radius:6px;border:1px solid var(--line);display:block;background:var(--bg);cursor:zoom-in}
+.th .x{position:absolute;top:-6px;right:-6px;width:24px;height:24px;border-radius:50%;padding:0;line-height:1}
+#fImgList,.gal{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px}
+.gal img{width:96px;height:96px}
+#viewer{position:fixed;inset:0;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+#viewer img{max-width:100%;max-height:100%;object-fit:contain}
+#viewer button{position:absolute;top:calc(12px + env(safe-area-inset-top,0px));right:12px}
 #toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 16px;border-radius:20px;font-size:.9rem;opacity:0;pointer-events:none;transition:opacity .2s}
 #toast.show{opacity:1}
 [hidden]{display:none!important}
@@ -97,6 +105,9 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
       </div>
       <label for="fMemo">メモ（検索の対象になります）</label>
       <textarea id="fMemo"></textarea>
+      <label>画像（1項目6枚まで・自動で圧縮して暗号化）</label>
+      <div id="fImgList"></div>
+      <div style="margin-top:8px"><input id="fImgIn" type="file" accept="image/*" multiple hidden><button id="fImgAdd" type="button">画像を追加</button></div>
       <p class="msg" id="formMsg" role="alert"></p>
       <div class="row" style="margin-top:12px;justify-content:flex-end">
         <button id="fCancel">キャンセル</button>
@@ -105,9 +116,10 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
     </div>
 
     <div id="list"></div>
-    <p class="note">データはマスターパスワードで暗号化されてからGoogleドライブに保存されます。マスターパスワードを忘れると復元できません。5分操作がないと自動でロックされます。検索の対象はサイト名・ID・メモで、パスワードは含みません。</p>
+    <p class="note">データはマスターパスワードで暗号化されてからGoogleドライブに保存されます。マスターパスワードを忘れると復元できません。5分操作がないと自動でロックされます。検索の対象はサイト名・ID・メモ・画像のファイル名で、パスワードは含みません。画像は1枚ずつ暗号化してドライブに保存され、表示にはインターネット接続が必要です。</p>
   </section>
 </main>
+<div id="viewer" hidden><button id="vClose" type="button">閉じる</button><img id="vImg" alt=""></div>
 <div id="toast" role="status"></div>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
@@ -197,6 +209,67 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
     }
   }
 
+  /* ---------- 画像 ---------- */
+  var MAXIMG=6, imgCache={}, formImgs=[], origImgs=[];
+  function rid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+  function compress(file){
+    return new Promise(function(res,rej){
+      var u=URL.createObjectURL(file), im=new Image();
+      im.onload=function(){
+        var sc=Math.min(1,1600/Math.max(im.width,im.height)), w=Math.round(im.width*sc), h=Math.round(im.height*sc);
+        var c=document.createElement('canvas');c.width=w;c.height=h;
+        var x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,w,h);x.drawImage(im,0,0,w,h);
+        URL.revokeObjectURL(u);
+        c.toBlob(function(b){b?res(b):rej(new Error('画像を変換できませんでした'))},'image/jpeg',0.85);
+      };
+      im.onerror=function(){URL.revokeObjectURL(u);rej(new Error('この形式の画像は読み込めませんでした'))};
+      im.src=u;
+    });
+  }
+  async function uploadImg(im){
+    var iv=crypto.getRandomValues(new Uint8Array(12));
+    var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},cryptoKey,await im.blob.arrayBuffer());
+    var b='pmi'+Date.now();
+    var mp=new Blob(['--'+b+'\r\nContent-Type: application/json\r\n\r\n'+JSON.stringify({name:'img-'+im.id+'.bin',parents:['appDataFolder']})+'\r\n--'+b+'\r\nContent-Type: application/octet-stream\r\n\r\n',iv,ct,'\r\n--'+b+'--']);
+    var r=await dfetch(UP+'/files?uploadType=multipart&fields=id',{method:'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body:mp});
+    im.fid=(await r.json()).id;
+  }
+  async function loadImg(im){
+    if(imgCache[im.id])return imgCache[im.id];
+    var r=await dfetch(API+'/files/'+im.fid+'?alt=media');
+    var buf=new Uint8Array(await r.arrayBuffer());
+    var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:buf.slice(0,12)},cryptoKey,buf.slice(12));
+    imgCache[im.id]=URL.createObjectURL(new Blob([pt],{type:'image/jpeg'}));
+    return imgCache[im.id];
+  }
+  async function delImgs(list){
+    for(var i=0;i<list.length;i++){if(list[i].fid){try{await dfetch(API+'/files/'+list[i].fid,{method:'DELETE'})}catch(e){}}}
+  }
+  function clearImgCache(){Object.keys(imgCache).forEach(function(k){URL.revokeObjectURL(imgCache[k])});imgCache={}}
+  function openViewer(u){$('vImg').src=u;$('viewer').hidden=false}
+  function renderFormImgs(){
+    var box=$('fImgList');box.textContent='';
+    formImgs.forEach(function(im,idx){
+      var w=el('div','th'), g=document.createElement('img');g.alt=im.name||'画像';
+      if(im.prev){g.src=im.prev}else{loadImg(im).then(function(u){g.src=u}).catch(function(){g.alt='読み込めません'})}
+      g.onclick=function(){if(g.src)openViewer(g.src)};
+      var x=el('button','x','×');x.type='button';x.setAttribute('aria-label','この画像を削除');
+      x.onclick=function(){
+        if(im.fid&&!origImgs.some(function(o){return o.id===im.id}))delImgs([im]);
+        if(im.prev&&!imgCache[im.id])URL.revokeObjectURL(im.prev);
+        formImgs.splice(idx,1);renderFormImgs();
+      };
+      w.appendChild(g);w.appendChild(x);box.appendChild(w);
+    });
+    $('fImgAdd').disabled=formImgs.length>=MAXIMG;
+  }
+  function discardForm(){
+    var dead=formImgs.filter(function(m){return m.fid&&!origImgs.some(function(o){return o.id===m.id})});
+    formImgs.forEach(function(m){if(m.prev&&!imgCache[m.id])URL.revokeObjectURL(m.prev)});
+    formImgs=[];$('form').hidden=true;
+    if(dead.length)delImgs(dead);
+  }
+
   /* ---------- 保存・同期 ---------- */
   function merge(a,b){
     var m={};a.concat(b).forEach(function(i){if(!m[i.id]||(i.upd||0)>(m[i.id].upd||0))m[i.id]=i});
@@ -222,7 +295,7 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
 
   /* ---------- ロック画面 ---------- */
   function showLock(){
-    cryptoKey=null;items=[];token=null;clearTimeout(timer);
+    cryptoKey=null;items=[];token=null;clearTimeout(timer);clearImgCache();formImgs=[];$('viewer').hidden=true;
     $('app').hidden=true;$('lock').hidden=false;$('form').hidden=true;
     $('confirmWrap').hidden=true;$('master').value='';$('master2').value='';$('lockMsg').textContent='';
     $('lockSub').textContent='マスターパスワードを入力すると、Googleドライブからデータを読み込みます。';
@@ -276,7 +349,7 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
     $('count').textContent=items.length+' 件を保存中';
     var shown=items.filter(function(i){
       if(!terms.length)return true;
-      var h=norm(i.site+' '+i.user+' '+i.memo);
+      var h=norm(i.site+' '+i.user+' '+i.memo+' '+(i.imgs||[]).map(function(m){return m.name}).join(' '));
       return terms.every(function(t){return h.indexOf(t)>-1});
     });
     $('hits').textContent=terms.length?shown.length+' 件が見つかりました（全 '+items.length+' 件）':'';
@@ -287,15 +360,30 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
       card.appendChild(el('div','meta','ID: '+(i.user||'—')));
       var pw=el('div','pw','パスワード: ••••••••');card.appendChild(pw);
       if(i.memo)card.appendChild(el('div','meta','メモ: '+i.memo));
+      var gal=el('div','gal');gal.hidden=true;card.appendChild(gal);
       var a=el('div','actions');
       function btn(t,fn,c){var b=el('button','small '+(c||''),t);b.type='button';b.onclick=fn;a.appendChild(b);return b}
       var tg=btn('表示',function(){vis=!vis;pw.textContent='パスワード: '+(vis?i.pass:'••••••••');tg.textContent=vis?'隠す':'表示'});
       btn('IDをコピー',function(){copy(i.user,'IDをコピーしました')});
       btn('パスワードをコピー',function(){copy(i.pass,'コピーしました（30秒後にクリア）',true)});
+      if(i.imgs&&i.imgs.length){
+        var gb=btn('画像 '+i.imgs.length+'枚',function(){
+          gal.hidden=!gal.hidden;gb.textContent=gal.hidden?'画像 '+i.imgs.length+'枚':'画像を隠す';
+          if(!gal.hidden&&!gal.dataset.done){
+            gal.dataset.done='1';
+            i.imgs.forEach(function(m){
+              var g=document.createElement('img');g.alt='読み込み中…';
+              g.onclick=function(){if(g.src)openViewer(g.src)};
+              gal.appendChild(g);
+              loadImg(m).then(function(u){g.src=u;g.alt=m.name||'画像'}).catch(function(){g.alt='読み込めません'});
+            });
+          }
+        });
+      }
       btn('編集',function(){openForm(i)});
       btn('削除',async function(){
         if(confirm('「'+(i.site||'この項目')+'」を削除しますか？\n（複数端末で同期中の場合、ほかの端末のデータから復活することがあります）')){
-          items=items.filter(function(x){return x.id!==i.id});render();await save();
+          var gone=i.imgs||[];items=items.filter(function(x){return x.id!==i.id});render();await save();await delImgs(gone);
         }
       },'danger');
       card.appendChild(a);list.appendChild(card);
@@ -315,7 +403,7 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
     $('fPass').value=out;
   }
   function openForm(i){
-    editId=i?i.id:null;
+    editId=i?i.id:null;origImgs=(i&&i.imgs)||[];formImgs=origImgs.map(function(m){return {id:m.id,fid:m.fid,name:m.name}});renderFormImgs();
     $('fSite').value=i?i.site:'';$('fUser').value=i?i.user:'';
     $('fPass').value=i?i.pass:'';$('fMemo').value=i?i.memo:'';
     $('formMsg').textContent='';$('form').hidden=false;
@@ -323,6 +411,19 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
   }
 
   /* ---------- イベント ---------- */
+  $('fImgAdd').onclick=function(){$('fImgIn').click()};
+  $('fImgIn').onchange=async function(){
+    var files=Array.prototype.slice.call(this.files), msg=$('formMsg');this.value='';msg.textContent='';
+    for(var k=0;k<files.length;k++){
+      if(formImgs.length>=MAXIMG){msg.textContent='画像は1項目につき'+MAXIMG+'枚までです。';break}
+      if(!/^image\//.test(files[k].type)){msg.textContent='画像ファイルを選んでください。';continue}
+      try{var b=await compress(files[k]);formImgs.push({id:rid(),name:files[k].name,blob:b,prev:URL.createObjectURL(b)})}
+      catch(e){msg.textContent=e.message}
+    }
+    renderFormImgs();
+  };
+  $('viewer').onclick=function(){this.hidden=true};
+  document.addEventListener('keydown',function(e){if(e.key==='Escape')$('viewer').hidden=true});
   $('lockBtn').onclick=unlock;
   ['master','master2'].forEach(function(id){$(id).addEventListener('keydown',function(e){if(e.key==='Enter')unlock()})});
   $('cidSave').onclick=function(){
@@ -335,15 +436,25 @@ details{margin-top:16px;font-size:.9rem}summary{cursor:pointer;color:var(--muted
   $('addBtn').onclick=function(){openForm(null);gen()};
   $('fGen').onclick=gen;
   $('len').oninput=function(){$('lenVal').textContent=this.value};
-  $('fCancel').onclick=function(){$('form').hidden=true};
+  $('fCancel').onclick=discardForm;
   $('search').oninput=render;
   $('fSave').onclick=async function(){
     var site=$('fSite').value.trim(), pass=$('fPass').value;
     if(!site){$('formMsg').textContent='サイト・サービス名を入力してください。';return}
     if(!pass){$('formMsg').textContent='パスワードを入力するか、「生成」を押してください。';return}
-    var rec={id:editId||String(Date.now())+Math.random().toString(16).slice(2),site:site,user:$('fUser').value.trim(),pass:pass,memo:$('fMemo').value.trim(),upd:Date.now()};
+    var sb=this;sb.disabled=true;
+    try{
+      var news=formImgs.filter(function(m){return m.blob});
+      for(var n=0;n<news.length;n++){
+        setSync('画像を保存中…（'+(n+1)+'/'+news.length+'）');
+        await uploadImg(news[n]);imgCache[news[n].id]=news[n].prev;news[n].blob=null;
+      }
+    }catch(e){sb.disabled=false;setSync('');$('formMsg').textContent='画像を保存できませんでした：'+e.message;return}
+    var rec={id:editId||String(Date.now())+Math.random().toString(16).slice(2),site:site,user:$('fUser').value.trim(),pass:pass,memo:$('fMemo').value.trim(),upd:Date.now(),imgs:formImgs.map(function(m){return {id:m.id,fid:m.fid,name:m.name}})};
+    var removed=origImgs.filter(function(o){return !formImgs.some(function(m){return m.id===o.id})});
     items=editId?items.map(function(x){return x.id===editId?rec:x}):[rec].concat(items);
-    $('form').hidden=true;render();await save();
+    $('form').hidden=true;formImgs=[];render();sb.disabled=false;
+    await save();await delImgs(removed);
   };
 
   showLock();
